@@ -1,0 +1,11 @@
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Node/Editor
+node_modules/
+.vscode/
+.idea/
+
+# GAS Clasp (if used in future)
+.clasp.json

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link rel="stylesheet" href="https://ssl.gstatic.com/docs/script/css/add-ons1.css">
+    <style>
+      .branding-below {
+        bottom: 56px;
+        top: 0;
+      }
+      .branding-text {
+        left: 7px;
+        position: relative;
+        top: 3px;
+      }
+      .logo {
+        vertical-align: middle;
+      }
+      .width-100 {
+        width: 100%;
+        box-sizing: border-box;
+      }
+      #status {
+        margin-top: 10px;
+        color: #666;
+        font-size: 12px;
+      }
+      .section {
+        margin-bottom: 20px;
+      }
+      .list-container {
+        max-height: 150px;
+        overflow-y: auto;
+        border: 1px solid #ccc;
+        padding: 5px;
+      }
+      .loading {
+        color: #999;
+        font-style: italic;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sidebar branding-below">
+      <div class="block">
+        <h3>カテゴリ・タグ設定</h3>
+        <p>WordPressから取得したカテゴリとタグを設定します。</p>
+      </div>
+      
+      <div class="block section">
+        <b>カテゴリ</b>
+        <div id="category-list" class="list-container">
+          <div class="loading">読み込み中...</div>
+        </div>
+      </div>
+      
+      <div class="block section">
+        <b>タグ</b>
+        <div id="tag-list" class="list-container">
+          <div class="loading">読み込み中...</div>
+        </div>
+      </div>
+
+      <div class="block" id="button-bar">
+        <button class="blue" id="save-btn">設定をドキュメントに保存</button>
+      </div>
+      
+      <div id="status"></div>
+    </div>
+    
+    <div class="sidebar bottom">
+      <span class="gray branding-text">GDocs to WP</span>
+    </div>
+
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+    <script>
+      /**
+       * 初期化
+       */
+      $(function() {
+        // データ読み込み
+        google.script.run
+          .withSuccessHandler(showData)
+          .withFailureHandler(showError)
+          .getTaxonomies();
+
+        // 保存ボタン
+        $('#save-btn').click(function() {
+          this.disabled = true;
+          $('#status').text('保存中...');
+          
+          const categories = [];
+          $('#category-list input:checked').each(function() {
+            categories.push($(this).val());
+          });
+          
+          const tags = [];
+          $('#tag-list input:checked').each(function() {
+            tags.push($(this).val());
+          });
+          
+          google.script.run
+            .withSuccessHandler(function() {
+              $('#status').text('保存しました。');
+              $('#save-btn').prop('disabled', false);
+            })
+            .withFailureHandler(function(e) {
+              showError(e);
+              $('#save-btn').prop('disabled', false);
+            })
+            .saveTaxonomiesToMetadata(categories, tags);
+        });
+      });
+
+      /**
+       * データを表示
+       */
+      function showData(data) {
+        if (!data) return;
+        
+        // カテゴリ
+        const catList = $('#category-list');
+        catList.empty();
+        if (data.categories && data.categories.length > 0) {
+          data.categories.forEach(function(cat) {
+            const div = $('<div>');
+            const checkbox = $('<input>').attr('type', 'checkbox').val(cat.name).attr('id', 'cat-' + cat.id);
+            const label = $('<label>').attr('for', 'cat-' + cat.id).text(cat.name);
+            div.append(checkbox).append(label);
+            catList.append(div);
+          });
+        } else {
+          catList.text('カテゴリが見つかりません');
+        }
+        
+        // タグ
+        const tagList = $('#tag-list');
+        tagList.empty();
+        if (data.tags && data.tags.length > 0) {
+          data.tags.forEach(function(tag) {
+            const div = $('<div>');
+            const checkbox = $('<input>').attr('type', 'checkbox').val(tag.name).attr('id', 'tag-' + tag.id);
+            const label = $('<label>').attr('for', 'tag-' + tag.id).text(tag.name);
+            div.append(checkbox).append(label);
+            tagList.append(div);
+          });
+        } else {
+            tagList.text('タグが見つかりません');
+        }
+      }
+
+      /**
+       * エラー表示
+       */
+      function showError(error) {
+        console.error(error);
+        $('#status').text('エラー: ' + error.message).css('color', 'red');
+        $('.loading').text('読み込み失敗');
+      }
+    </script>
+  </body>
+</html>
