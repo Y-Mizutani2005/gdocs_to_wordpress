@@ -46,6 +46,64 @@ class DocParser {
       const element = body.getChild(i);
       const type = element.getType();
       
+      // 引用ブロック（ショートコード）の判定
+      // [blockquote] または [quote] で開始
+      if (type === DocumentApp.ElementType.PARAGRAPH) {
+        let text = element.asParagraph().getText().trim();
+        // 全角ブラケットの正規化
+        text = text.replace(/[［］]/g, m => m === '［' ? '[' : ']');
+        const lowerText = text.toLowerCase();
+
+        // 1行完結型の判定 ([blockquote]...[/blockquote])
+        // ネスト対応はしない簡易実装
+        const singleLineMatch = lowerText.match(/^\[(blockquote|quote)\](.*?)\[\/\1\]$/);
+        
+        if (singleLineMatch) {
+          // コンテンツ部分の処理
+          // _processParagraphを通してHTML化し、タグ部分を除去してblockquoteで囲む
+          // 注: _processParagraphは <p>...</p> を返す
+          let paraHtml = this._processParagraph(element);
+          
+          // タグの除去 (単純置換だとHTMLタグを壊す恐れがあるが、今回はタグがテキストとして入っている前提)
+          // 念のため、生成されたHTMLから [blockquote] と [/blockquote] を除去する
+          // タグ自体が装飾されている可能性も考慮し、正規表現で柔軟に
+          const tagName = singleLineMatch[1];
+          const startTagRegex = new RegExp(`\\[${tagName}\\]`, 'i');
+          const endTagRegex = new RegExp(`\\[\\/${tagName}\\]`, 'i');
+          
+          paraHtml = paraHtml.replace(startTagRegex, '').replace(endTagRegex, '');
+          
+          html += `<blockquote class="${CONFIG.CLASSES.BLOCKQUOTE || 'wp-block-quote'}">\n${paraHtml}</blockquote>\n`;
+          continue;
+        }
+
+        // 複数行ブロックの開始判定
+        if (lowerText === '[blockquote]' || lowerText === '[quote]') {
+          const quoteItems = [];
+          i++; // 開始タグをスキップ
+          
+          while (i < children) {
+            const nextElement = body.getChild(i);
+            
+            // 終了タグチェック
+            if (nextElement.getType() === DocumentApp.ElementType.PARAGRAPH) {
+              let nextText = nextElement.asParagraph().getText().trim();
+              nextText = nextText.replace(/[［］]/g, m => m === '［' ? '[' : ']').toLowerCase();
+              
+              if (nextText === '[/blockquote]' || nextText === '[/quote]') {
+                break; // 終了タグが見つかったらループを抜ける
+              }
+            }
+            
+            quoteItems.push(nextElement);
+            i++;
+          }
+          
+          html += this._processBlockquoteSequence(quoteItems);
+          continue; // 次の要素へ
+        }
+      }
+
       // リスト処理の分岐
       if (type === DocumentApp.ElementType.LIST_ITEM) {
         // 連続するリストアイテムを収集
@@ -258,11 +316,9 @@ class DocParser {
         return this._processParagraph(element);
       
       case DocumentApp.ElementType.TABLE:
-        // Phase 2で実装（会話ブロックなど）
         // メタデータテーブルはparseメソッド側でスキップされるため、
         // ここに来るテーブルは本文中のテーブル。
-        // return this._processTable(element);
-        return '';
+        return this._processTable(element.asTable());
         
       case DocumentApp.ElementType.LIST_ITEM:
         return this._processListItem(element);
@@ -362,6 +418,25 @@ class DocParser {
   }
 
   /**
+   * 引用ブロックの一連処理
+   */
+  _processBlockquoteSequence(elements) {
+    if (elements.length === 0) return '';
+    
+    const blockquoteClass = CONFIG.CLASSES.BLOCKQUOTE || 'wp-block-quote';
+    let html = `<blockquote class="${blockquoteClass}">\n`;
+    
+    for (const element of elements) {
+      // 再帰的に要素を処理
+      // 注: ここで _processElement を呼ぶと、ネストしたリストなども処理される
+      html += this._processElement(element);
+    }
+    
+    html += `</blockquote>\n`;
+    return html;
+  }
+
+  /**
    * 段落（見出し含む）の処理
    */
   _processParagraph(para) {
@@ -435,6 +510,9 @@ class DocParser {
       return `<${tagName} id="${id}"${classAttr}>${text}</${tagName}>\n`;
     }
 
+    // 引用ブロック判定（インデントがある段落）は削除
+    // ショートコード [blockquote] ... [/blockquote] に移行したため
+    
     // 通常の段落
     const pClass = CONFIG.CLASSES.P ? ` class="${CONFIG.CLASSES.P}"` : '';
     return `<p${pClass}>${text}</p>\n`;
@@ -546,4 +624,224 @@ class DocParser {
     // Gutenberg画像ブロックの構造に合わせるために専用のプレースホルダーを使用
     return `<!-- WP_IMAGE_PLACEHOLDER:${index} -->\n`;
   }
+
+  /**
+   * テーブル要素の処理
+   * @param {Table} table - Google Docsのテーブル要素
+   * @returns {string} 変換後のHTML文字列
+   */
+  _processTable(table) {
+    // 会話ブロック(2列テーブル)かどうか判定
+    if (this._isChatTable(table)) {
+      return this._processChatTable(table);
+    }
+    
+    // 通常のテーブルはHTMLテーブルとして出力
+    return this._processRegularTable(table);
+  }
+
+  /**
+   * 会話ブロック(チャット形式)テーブルかどうかを判定
+   * @param {Table} table - Google Docsのテーブル要素
+   * @returns {boolean} 会話ブロックテーブルならtrue
+   */
+  _isChatTable(table) {
+    // 会話ブロックの条件:
+    // 1. 2列であること
+    // 2. 少なくとも1行あること
+    
+    if (table.getNumRows() === 0) {
+      return false;
+    }
+    
+    const firstRow = table.getRow(0);
+    if (firstRow.getNumCells() !== 2) {
+      return false;
+    }
+    
+    // 全行が2列かどうかもチェック
+    for (let i = 0; i < table.getNumRows(); i++) {
+      if (table.getRow(i).getNumCells() !== 2) {
+        return false;
+      }
+    }
+    
+    return true;
+  }
+
+  /**
+   * 会話ブロックテーブルをHTML構造に変換
+   * @param {Table} table - 会話ブロックテーブル
+   * @returns {string} 会話ブロックのHTML
+   */
+  /**
+   * 会話ブロックテーブルをHTML構造に変換
+   * @param {Table} table - 会話ブロックテーブル
+   * @returns {string} 会話ブロックのHTML
+   */
+  _processChatTable(table) {
+    const containerClass = CONFIG.CLASSES.CHAT_CONTAINER || 'chat-block';
+    const rowClass = CONFIG.CLASSES.CHAT_ROW || 'chat-row';
+    const iconClass = CONFIG.CLASSES.CHAT_ICON || 'chat-icon';
+    const bubbleClass = CONFIG.CLASSES.CHAT_BUBBLE || 'chat-bubble';
+    const leftClass = CONFIG.CLASSES.CHAT_LEFT || 'chat-left';
+    const rightClass = CONFIG.CLASSES.CHAT_RIGHT || 'chat-right';
+    
+    let html = `<div class="${containerClass}">\n`;
+    
+    for (let i = 0; i < table.getNumRows(); i++) {
+      const row = table.getRow(i);
+      const iconCell = row.getCell(0);
+      const bubbleCell = row.getCell(1);
+      
+      // セリフセルのテキストから[L]/[R]マーカーを検出
+      const bubbleRawText = this._getCellRawText(bubbleCell);
+      let positionClass = leftClass; // デフォルトは左
+      
+      if (bubbleRawText.trim().startsWith('[R]') || bubbleRawText.trim().startsWith('[r]')) {
+        positionClass = rightClass;
+      } else if (bubbleRawText.trim().startsWith('[L]') || bubbleRawText.trim().startsWith('[l]')) {
+        positionClass = leftClass;
+      }
+      
+      // アイコンセルの処理（画像またはテキスト）
+      const iconContent = this._processCellContent(iconCell);
+      // アイコンセル内の画像を 'chat-icon' としてマーク
+      this._markImagesAsChatIcon(iconContent);
+      
+      // セリフセルの処理（[L]/[R]マーカーを除去）
+      const bubbleContent = this._processCellContentWithMarkerRemoval(bubbleCell);
+      
+      html += `  <div class="${rowClass} ${positionClass}">\n`;
+      html += `    <div class="${iconClass}">${iconContent}</div>\n`;
+      html += `    <div class="${bubbleClass}">${bubbleContent}</div>\n`;
+      html += `  </div>\n`;
+    }
+    
+    html += `</div>\n`;
+    return html;
+  }
+
+  /**
+   * コンテンツ内のプレースホルダーを検索し、対応する画像をチャットアイコンとしてマークする
+   */
+  _markImagesAsChatIcon(content) {
+    const regex = /WP_IMAGE_PLACEHOLDER:(\d+)/g;
+    let match;
+    while ((match = regex.exec(content)) !== null) {
+      const index = parseInt(match[1], 10);
+      const image = this.images.find(img => img.index === index);
+      if (image) {
+        image.context = 'chat-icon';
+      }
+    }
+  }
+
+  /**
+   * セルの生テキストを取得（[L]/[R]マーカー検出用）
+   * @param {TableCell} cell - テーブルセル
+   * @returns {string} セル内の生テキスト
+   */
+  _getCellRawText(cell) {
+    let text = '';
+    for (let i = 0; i < cell.getNumChildren(); i++) {
+      const child = cell.getChild(i);
+      if (child.getType() === DocumentApp.ElementType.PARAGRAPH) {
+        text += child.asParagraph().getText();
+      }
+    }
+    return text;
+  }
+
+  /**
+   * セル内容を処理し、[L]/[R]マーカーを除去
+   * @param {TableCell} cell - テーブルセル
+   * @returns {string} セル内容のHTML（マーカー除去済み）
+   */
+  _processCellContentWithMarkerRemoval(cell) {
+    return this._processCellContent(cell, true);
+  }
+
+  /**
+   * テーブルセルの内容を処理
+   * @param {TableCell} cell - テーブルセル
+   * @param {boolean} removeMarker - [L]/[R]マーカーを除去するかどうか
+   * @returns {string} セル内容のHTML
+   */
+  _processCellContent(cell, removeMarker = false) {
+    let html = '';
+    
+    for (let i = 0; i < cell.getNumChildren(); i++) {
+      const child = cell.getChild(i);
+      const type = child.getType();
+      
+      if (type === DocumentApp.ElementType.PARAGRAPH) {
+        const para = child.asParagraph();
+        
+        // 画像のチェック (PositionedImage)
+        const positionedImages = para.getPositionedImages();
+        if (positionedImages.length > 0) {
+          for (const pImg of positionedImages) {
+            html += this._processImage(pImg);
+          }
+        }
+
+        // 段落が画像のみかどうかをチェック（画像のみの場合は<p>で囲まない）
+        let isImageOnly = false;
+        if (para.getNumChildren() === 1 && para.getChild(0).getType() === DocumentApp.ElementType.INLINE_IMAGE) {
+          isImageOnly = true;
+        }
+        
+        // テキスト内容処理（インライン画像もここで処理される）
+        let text = this._processText(para);
+        
+        if (text) {
+          // マーカー除去が必要な場合
+          if (removeMarker) {
+             text = text.replace(/^\s*\[(L|R|l|r)\]\s*/, '');
+          }
+          
+          if (text) {
+             // 画像のみの場合は<p>タグを省略
+             if (isImageOnly) {
+               html += text;
+             } else {
+               html += `<p>${text}</p>`;
+             }
+          }
+        }
+      }
+    }
+    
+    return html;
+  }
+
+  /**
+   * 通常のテーブルをHTMLテーブルとして出力（Gutenberg準拠）
+   * @param {Table} table - Google Docsのテーブル要素
+   * @returns {string} HTMLテーブル(figureで囲む)
+   */
+  _processRegularTable(table) {
+    const figureClass = CONFIG.CLASSES.TABLE_FIGURE || 'wp-block-table';
+    const tableClass = CONFIG.CLASSES.TABLE || '';
+    
+    let html = `<figure class="${figureClass}">\n<table class="${tableClass}">\n`;
+    
+    for (let i = 0; i < table.getNumRows(); i++) {
+      const row = table.getRow(i);
+      html += '  <tr>\n';
+      
+      for (let j = 0; j < row.getNumCells(); j++) {
+        const cell = row.getCell(j);
+        const cellContent = this._processCellContent(cell);
+        html += `    <td>${cellContent}</td>\n`;
+      }
+      
+      html += '  </tr>\n';
+    }
+    
+    html += '</table>\n</figure>\n';
+    return html;
+  }
 }
+

@@ -61,10 +61,17 @@ const CONFIG = {
     // 引用 (Phase 2用)
     BLOCKQUOTE: 'wp-block-quote',
     
+    // テーブル (Gutenberg準拠)
+    TABLE_FIGURE: 'wp-block-table',
+    TABLE: '',  // tableタグ自体にクラスは不要（figureで囲む）
+    
     // 会話ブロック (Phase 2用)
     CHAT_CONTAINER: 'chat-block',
     CHAT_ROW: 'chat-row',
     CHAT_ICON: 'chat-icon',
     CHAT_BUBBLE: 'chat-bubble',
+    CHAT_LEFT: 'chat-left',   // 左から吹き出し [L]
+    CHAT_RIGHT: 'chat-right', // 右から吹き出し [R]
+    CHAT_ICON_IMG: 'chat-icon-img', // チャットアイコン画像
   }
 };

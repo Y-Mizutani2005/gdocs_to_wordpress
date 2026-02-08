@@ -235,14 +235,24 @@ function postAsDraft() {
         Utils.log(`Uploaded image: ${image.index}`, media);
 
         // HTML置換
-        // Gutenberg画像ブロックの形式に変換
-        // <figure class="wp-block-image size-large"><img src="..." alt="..." class="wp-image-{id}"/></figure>
-        const imageHtml = `
+        let imageHtml = '';
+        
+        // チャットアイコンの場合はシンプルなimgタグ
+        if (image.context === 'chat-icon') {
+           const iconClass = CONFIG.CLASSES.CHAT_ICON_IMG || 'chat-icon-img';
+           imageHtml = `<img src="${media.source_url}" alt="${Utils.escapeHtml(image.alt)}" class="${iconClass} wp-image-${media.id}"/>`;
+        } else {
+           // 通常画像はGutenberg画像ブロックの形式
+           // <figure class="wp-block-image size-large"><img src="..." alt="..." class="wp-image-{id}"/></figure>
+           imageHtml = `
 <figure class="${CONFIG.CLASSES.IMAGE_FIGURE}">
   <img src="${media.source_url}" alt="${Utils.escapeHtml(image.alt)}" class="wp-image-${media.id}"/>
 </figure>`;
+        }
         
-        finalHtml = finalHtml.replace(`<!-- WP_IMAGE_PLACEHOLDER:${image.index} -->\n`, imageHtml);
+        // 正規表現で置換 (プレースホルダーの後の改行/空白も許容して除去)
+        const regex = new RegExp(`<!-- WP_IMAGE_PLACEHOLDER:${image.index} -->\\s*`, 'g');
+        finalHtml = finalHtml.replace(regex, imageHtml);
         
         // APIレート制限回避のためのウェイト
         Utilities.sleep(500);
@@ -250,8 +260,10 @@ function postAsDraft() {
       } catch (e) {
         Utils.error(`Image upload failed for index ${image.index}`, e);
         // 失敗した場合はエラー表示のプレースホルダーを残すか、代替テキストにする
+        // 失敗時も正規表現で置換
+        const errorRegex = new RegExp(`<!-- WP_IMAGE_PLACEHOLDER:${image.index} -->\\s*`, 'g');
         finalHtml = finalHtml.replace(
-          `<!-- WP_IMAGE_PLACEHOLDER:${image.index} -->`, 
+          errorRegex,  
           `<p style="color:red; font-weight:bold;">[画像アップロード失敗: ${Utils.escapeHtml(image.alt)}]</p>`
         );
       }
